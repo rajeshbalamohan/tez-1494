@@ -87,7 +87,21 @@ import java.util.TreeSet;
  * Used the following command to run the test.  Use -Dtez.shuffle-vertex-manager.enable
  * .auto-parallel=true to reproduce the issue
  * HADOOP_USER_CLASSPATH_FIRST=true HADOOP_CLASSPATH=/root/tez-1494/tez_1494.jar:/root/tez-autobuild/dist/tez/*:/root/tez-autobuild/dist/tez/lib/*:/root/tez-autobuild/dist/tez/conf:$HADOOP_CLASSPATH yarn jar /root/tez-1494/tez_1494.jar org.apache.tez.Tez_1494 -Dtez.shuffle-vertex-manager.enable.auto-parallel=true /tmp/map_2.out /tmp/map_7.out /tmp/test.out.1484
+  *
+ * Creates following DAG
+ *
+ *
+ * source1 --> Map_2 --(Scatter_Gather)--> Reducer_3
+ * source2 --> Map_7 ----(unordered)-------------------\\
+ *                                                      ==> Map_5
+ * Reducer_3 (auto_parallel) -------(unordered)--------//
+ * Map_5 --(Scatter_Gather)---> Reducer_6
+ * Reducer_6 --> Sink
+ *
+ * Reducer_3 will go down from 2 tasks to 1 task.  But Map_5 would not be aware of this change.
+ *
  */
+
 public class Tez_1494 extends Configured implements Tool {
 
   static final String PROCESSOR_NAME = "processorName";
