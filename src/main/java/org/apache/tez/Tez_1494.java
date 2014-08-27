@@ -354,8 +354,8 @@ public class Tez_1494 extends Configured implements Tool {
     try {
       DAGClient statusClient = tezClient.submitDAG(dag);
 
-      //Start monitor
-      Monitor monitor = new Monitor(statusClient);
+      //Start monitor (note: not shutting down thread)
+      //Monitor monitor = new Monitor(statusClient);
 
       DAGStatus status = statusClient.waitForCompletionWithStatusUpdates(
           EnumSet.of(StatusGetOpts.GET_COUNTERS));
