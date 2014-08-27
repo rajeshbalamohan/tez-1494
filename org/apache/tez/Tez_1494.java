@@ -33,6 +33,7 @@ import org.apache.tez.dag.api.UserPayload;
 import org.apache.tez.dag.api.Vertex;
 import org.apache.tez.dag.api.client.DAGClient;
 import org.apache.tez.dag.api.client.DAGStatus;
+import org.apache.tez.dag.api.client.Progress;
 import org.apache.tez.dag.api.client.StatusGetOpts;
 import org.apache.tez.mapreduce.input.MRInput;
 import org.apache.tez.mapreduce.output.MROutput;
@@ -53,9 +54,13 @@ import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
 
 /**
  * Licensed to the Apache Software Foundation (ASF) under one
@@ -81,7 +86,7 @@ import java.util.Map;
  * Create 2 sample text files and upload to HDFS
  * Used the following command to run the test.  Use -Dtez.shuffle-vertex-manager.enable
  * .auto-parallel=true to reproduce the issue
- * HADOOP_CLASSPATH=/root/tez-1494/tez_1494.jar:/root/tez-autobuild/dist/tez/*:/root/tez-autobuild/dist/tez/lib/*:/root/tez-autobuild/dist/tez/conf:$HADOOP_CLASSPATH yarn jar tez_1494.jar org.apache.tez.Tez_1494 -Dtez.shuffle-vertex-manager.enable.auto-parallel=false /tmp/map_2.out /tmp/map_7.out /tmp/test.out.1484
+ * HADOOP_USER_CLASSPATH_FIRST=true HADOOP_CLASSPATH=/root/tez-1494/tez_1494.jar:/root/tez-autobuild/dist/tez/*:/root/tez-autobuild/dist/tez/lib/*:/root/tez-autobuild/dist/tez/conf:$HADOOP_CLASSPATH yarn jar /root/tez-1494/tez_1494.jar org.apache.tez.Tez_1494 -Dtez.shuffle-vertex-manager.enable.auto-parallel=true /tmp/map_2.out /tmp/map_7.out /tmp/test.out.1484
  */
 public class Tez_1494 extends Configured implements Tool {
 
@@ -189,6 +194,9 @@ public class Tez_1494 extends Configured implements Tool {
     // staging dir
     FileSystem fs = FileSystem.get(tezConf);
     Path jobJar = new Path(stagingDir, "job.jar");
+    if (fs.exists(jobJar)) {
+      fs.delete(jobJar, false);
+    }
     fs.copyFromLocalFile(getCurrentJarURL(), jobJar);
 
     localResources.put("job.jar", createLocalResource(fs, jobJar));
@@ -288,13 +296,13 @@ public class Tez_1494 extends Configured implements Tool {
 
     name = "Reducer_6";
     Vertex reducer_6 = createVertex(name, name, EchoProcessor.class.getName(), null,
-        null, "Reducer_6_sink", sinkDescriptor, 10, 0);
+        null, "Reducer_6_sink", sinkDescriptor, 1, 0);
     vertexList.add(reducer_6);
 
-    Edge m2_r3_edge = Edge.create(map_2, reducer_3, OrderedPartitionedKVEdgeConfig.newBuilder(Text
+    Edge m2_r3_edge = Edge.create(map_2, reducer_3, OrderedPartitionedKVEdgeConfig.newBuilder(LongWritable
             .class
             .getName(),
-        LongWritable.class.getName(), HashPartitioner.class.getName()).build()
+        Text.class.getName(), HashPartitioner.class.getName()).build()
         .createDefaultEdgeProperty());
 
     Edge m7_m5_edge = Edge.create(map_7, map_5, UnorderedKVEdgeConfig.newBuilder(LongWritable.class
@@ -342,13 +350,113 @@ public class Tez_1494 extends Configured implements Tool {
     TezClient tezClient = TezClient.create("Tez_1494", tezConf, false);
     tezClient.start();
     DAG dag = createDAG(map_2_input, map_7_input, output, tezConf);
-    DAGClient statusClient = tezClient.submitDAG(dag);
 
-    DAGStatus status = statusClient.waitForCompletionWithStatusUpdates(
-        EnumSet.of(StatusGetOpts.GET_COUNTERS));
+    try {
+      DAGClient statusClient = tezClient.submitDAG(dag);
 
-    return (status.getState() == DAGStatus.State.SUCCEEDED) ? 0 : -1;
+      //Start monitor
+      Monitor monitor = new Monitor(statusClient);
+
+      DAGStatus status = statusClient.waitForCompletionWithStatusUpdates(
+          EnumSet.of(StatusGetOpts.GET_COUNTERS));
+
+      return (status.getState() == DAGStatus.State.SUCCEEDED) ? 0 : -1;
+    } finally {
+      if (tezClient != null) {
+        tezClient.stop();
+      }
+    }
   }
+
+  //Most of this is borrowed from Hive. Trimmed down to fit this test
+  static class Monitor extends Thread {
+    DAGClient client;
+
+    public Monitor(DAGClient client) {
+      this.client = client;
+      this.start();
+    }
+    public void run() {
+      try {
+        report(client);
+      } catch (Exception e) {
+        e.printStackTrace();
+      }
+    }
+
+    public void report(DAGClient dagClient) throws Exception {
+
+      Set<StatusGetOpts> opts = new HashSet<StatusGetOpts>();
+      DAGStatus.State lastState = null;
+      String lastReport = null;
+
+      while(true) {
+        try {
+
+          DAGStatus status = dagClient.getDAGStatus(opts);
+          Map<String, Progress> progressMap = status.getVertexProgress();
+          DAGStatus.State state = status.getState();
+
+          if (state != lastState || state == state.RUNNING) {
+            lastState = state;
+
+            switch (state) {
+            case SUBMITTED:
+              System.out.println("Status: Submitted");
+              break;
+            case INITING:
+              System.out.println("Status: Initializing");
+              break;
+            case RUNNING:
+              printStatus(progressMap, lastReport);
+              break;
+            }
+          }
+          Thread.sleep(2000);
+        } catch (Exception e) {
+          e.printStackTrace();
+        }
+      }
+    }
+
+    private void printStatus(Map<String, Progress> progressMap, String lastReport) {
+      StringBuffer reportBuffer = new StringBuffer();
+
+      SortedSet<String> keys = new TreeSet<String>(progressMap.keySet());
+      for (String s: keys) {
+        Progress progress = progressMap.get(s);
+        final int complete = progress.getSucceededTaskCount();
+        final int total = progress.getTotalTaskCount();
+        final int running = progress.getRunningTaskCount();
+        final int failed = progress.getFailedTaskCount();
+        if (total <= 0) {
+          reportBuffer.append(String.format("%s: -/-\t", s, complete, total));
+        } else {
+          if(complete < total && (complete > 0 || running > 0 || failed > 0)) {
+          /* vertex is started, but not complete */
+            if (failed > 0) {
+              reportBuffer.append(String.format("%s: %d(+%d,-%d)/%d\t", s, complete, running, failed, total));
+            } else {
+              reportBuffer.append(String.format("%s: %d(+%d)/%d\t", s, complete, running, total));
+            }
+          } else {
+          /* vertex is waiting for input/slots or complete */
+            if (failed > 0) {
+            /* tasks finished but some failed */
+              reportBuffer.append(String.format("%s: %d(-%d)/%d\t", s, complete, failed, total));
+            } else {
+              reportBuffer.append(String.format("%s: %d/%d\t", s, complete, total));
+            }
+          }
+        }
+      }
+
+      String report = reportBuffer.toString();
+      System.out.println(report);
+    }
+  }
+
+
 
   public static void main(String[] args) throws Exception {
     ToolRunner.run(new Configuration(), new Tez_1494(), args);
