@@ -61,6 +61,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Licensed to the Apache Software Foundation (ASF) under one
@@ -351,11 +352,12 @@ public class Tez_1494 extends Configured implements Tool {
     tezClient.start();
     DAG dag = createDAG(map_2_input, map_7_input, output, tezConf);
 
+    AtomicBoolean shutdown = new AtomicBoolean(false);
     try {
       DAGClient statusClient = tezClient.submitDAG(dag);
 
       //Start monitor (note: not shutting down thread)
-      //Monitor monitor = new Monitor(statusClient);
+      Monitor monitor = new Monitor(statusClient, shutdown);
 
       DAGStatus status = statusClient.waitForCompletionWithStatusUpdates(
           EnumSet.of(StatusGetOpts.GET_COUNTERS));
@@ -365,15 +367,18 @@ public class Tez_1494 extends Configured implements Tool {
       if (tezClient != null) {
         tezClient.stop();
       }
+      shutdown.set(true);
     }
   }
 
   //Most of this is borrowed from Hive. Trimmed down to fit this test
   static class Monitor extends Thread {
     DAGClient client;
+    AtomicBoolean shutdown;
 
-    public Monitor(DAGClient client) {
+    public Monitor(DAGClient client, AtomicBoolean shutdown) {
       this.client = client;
+      this.shutdown = shutdown;
       this.start();
     }
     public void run() {
@@ -390,7 +395,7 @@ public class Tez_1494 extends Configured implements Tool {
       DAGStatus.State lastState = null;
       String lastReport = null;
 
-      while(true) {
+      while(!shutdown.get()) {
         try {
 
           DAGStatus status = dagClient.getDAGStatus(opts);
@@ -408,6 +413,10 @@ public class Tez_1494 extends Configured implements Tool {
               System.out.println("Status: Initializing");
               break;
             case RUNNING:
+              printStatus(progressMap, lastReport);
+              break;
+            case SUCCEEDED:
+              System.out.println("Done!!!..Succeeded");
               printStatus(progressMap, lastReport);
               break;
             }
@@ -462,4 +471,3 @@ public class Tez_1494 extends Configured implements Tool {
     ToolRunner.run(new Configuration(), new Tez_1494(), args);
   }
 }
-
