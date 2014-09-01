@@ -7,3 +7,12 @@ hadoop dfs -rmr -skipTrash /tmp/root/staging/job.jar /tmp/*.jar; HADOOP_USER_CLA
 You may tweak it to suit your environment
 
 With -Dtez.shuffle-vertex-manager.enable.auto-parallel=false, this job would succeed.  Paralleism changed event is not propagated to Map_5 (which has got both incoming edges as broadcast)
+
+If you followed INSTALL.txt of tez, you can try the following (easiest)
+- assuming you have configured tez-site.xml in TEZ_CONF_DIR
+
+export TEZ_JARS=/root/tez-autobuild/dist/tez
+export TEZ_CONF_DIR=$TEZ_JARS/conf
+export HADOOP_CLASSPATH=${TEZ_CONF_DIR}:${TEZ_JARS}/*:${TEZ_JARS}/lib/*
+ yarn jar /root/tez-1494/target/tez_1494-0.0.1-SNAPSHOT.jar org.apache.tez.Tez_1494 -Dtez.shuffle-vertex-manager.enable.auto-parallel=true /tmp/map_2.out /tmp/map_7.out /tmp/test.out.1484
+
